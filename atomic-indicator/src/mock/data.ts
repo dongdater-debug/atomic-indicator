@@ -780,7 +780,9 @@ export const baseIndicatorsByAtomic: Record<string, BaseIndicator[]> = {
   'ind-1': [
     { id: 'base-1', name: '日订单数量', nameEn: 'daily_order_count', status: 'online', owner: '张三', createTime: '2024-01-16 10:00:00' },
   ],
-  'ind-2': [],
+  'ind-2': [
+    { id: 'base-2', name: '周订单金额汇总', nameEn: 'weekly_order_amount_sum', status: 'online', owner: '李四', createTime: '2024-01-15 10:00:00' },
+  ],
   'ind-3': [],
 }
 

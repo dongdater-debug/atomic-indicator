@@ -122,6 +122,7 @@
       </el-form-item>
 
       <el-divider content-position="left">技术信息（必填）</el-divider>
+      <div class="tech-info-section" @click.capture="handleTechSectionCapture">
       <el-form-item label="模型选择" prop="modelId">
         <el-input
           :model-value="selectedModelName"
@@ -260,6 +261,7 @@
           />
         </el-select>
       </el-form-item>
+      </div>
     </el-form>
 
     <div class="form-actions">
@@ -267,7 +269,7 @@
       <el-button
         type="primary"
         :loading="submitting"
-        :disabled="isEdit && indicator?.status === 'offline'"
+        :disabled="submitting"
         @click="handleSave"
       >
         保存
@@ -333,6 +335,26 @@
         <el-button type="primary" @click="confirmCancel">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="techRiskDialogVisible"
+      title="编辑提示"
+      width="640px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <p class="tech-risk-tip">
+        该原子指标已被下游引用，修改表达式等技术配置将影响口径与计算结果，可能引发数据异常。
+      </p>
+      <el-table :data="baseIndicatorRefList" style="width: 100%; margin-top: 12px">
+        <el-table-column prop="nameEn" label="基础指标英文名" min-width="140" />
+        <el-table-column prop="nameCn" label="基础指标中文名" min-width="140" />
+        <el-table-column prop="owner" label="基础指标负责人" width="120" />
+      </el-table>
+      <template #footer>
+        <el-button type="primary" @click="confirmTechRiskAcknowledge">我已知悉</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -349,6 +371,7 @@ import {
   models,
   expressionFunctions,
   currentUser,
+  baseIndicatorsByAtomic,
 } from '@/mock/data'
 import type { AtomicIndicator, AssetCatalogNode, Model } from '@/types'
 
@@ -367,11 +390,50 @@ const exprFuncCategory = ref<string>('')
 const isEdit = computed(() => !!route.params.id)
 const indicator = ref<AtomicIndicator | null>(null)
 
-const editableInOnlineEdit = new Set(['nameCn', 'description', 'assetCatalog', 'applicableDimensions'])
+const techRiskDialogVisible = ref(false)
+const techRiskAcknowledged = ref(false)
+
+const hasBaseIndicatorRefs = computed(() => {
+  if (!indicator.value) return false
+  return (baseIndicatorsByAtomic[indicator.value.id]?.length ?? 0) > 0
+})
+
+const baseIndicatorRefList = computed(() => {
+  if (!indicator.value) return []
+  return (baseIndicatorsByAtomic[indicator.value.id] || []).map((b) => ({
+    nameEn: b.nameEn || '—',
+    nameCn: b.name,
+    owner: b.owner,
+  }))
+})
+
+const needsTechRiskDialog = computed(
+  () =>
+    isEdit.value &&
+    indicator.value?.status === 'online' &&
+    hasBaseIndicatorRefs.value
+)
+
 function isFieldEditable(field: string): boolean {
   if (!isEdit.value) return true
-  if (indicator.value?.status === 'offline') return false
-  return editableInOnlineEdit.has(field)
+  if (indicator.value?.status === 'offline') return true
+  if (indicator.value?.status === 'online' && !hasBaseIndicatorRefs.value) return true
+  if (field === 'nameEn') return false
+  return true
+}
+
+function handleTechSectionCapture(e: MouseEvent) {
+  if (!needsTechRiskDialog.value) return
+  if (techRiskAcknowledged.value) return
+  e.preventDefault()
+  e.stopPropagation()
+  e.stopImmediatePropagation()
+  techRiskDialogVisible.value = true
+}
+
+function confirmTechRiskAcknowledge() {
+  techRiskAcknowledged.value = true
+  techRiskDialogVisible.value = false
 }
 
 const form = ref({
@@ -700,6 +762,7 @@ function loadIndicator() {
   const ind = atomicIndicators.find((i) => i.id === id)
   if (ind) {
     indicator.value = ind
+    techRiskAcknowledged.value = false
     const subjectList = ind.subject ? ind.subject.split(',').map((s) => s.trim()).filter(Boolean) : []
     form.value = {
       nameCn: ind.nameCn,
@@ -781,9 +844,26 @@ watch(
   },
   { deep: true }
 )
+
+watch(
+  () => route.params.id,
+  (id) => {
+    if (id && isEdit.value) loadIndicator()
+  }
+)
 </script>
 
 <style scoped>
+.tech-risk-tip {
+  margin: 0;
+  line-height: 1.6;
+  color: #606266;
+}
+
+.tech-info-section {
+  display: block;
+}
+
 .atomic-indicator-form {
   max-width: 800px;
 }
@@ -943,6 +1023,9 @@ watch(
 .form-actions {
   padding-top: 24px;
   border-top: 1px solid #eee;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 .model-dialog-content {
   display: flex;

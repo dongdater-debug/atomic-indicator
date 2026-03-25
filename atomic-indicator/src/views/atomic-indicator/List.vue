@@ -50,8 +50,29 @@
           </template>
         </el-input>
         <el-select v-model="filters.status" placeholder="指标状态" clearable class="filter-select">
+          <el-option label="全部" value="" />
           <el-option label="已上线" value="online" />
           <el-option label="已下线" value="offline" />
+        </el-select>
+        <el-cascader
+          v-model="filters.subjectList"
+          :options="subjectOptions"
+          :props="{ multiple: true, emitPath: false, checkStrictly: true }"
+          placeholder="指标主体"
+          clearable
+          collapse-tags
+          collapse-tags-tooltip
+          class="filter-cascader"
+        />
+        <el-select
+          v-model="filters.modelIds"
+          multiple
+          placeholder="关联模型"
+          filterable
+          clearable
+          class="filter-select"
+        >
+          <el-option v-for="m in models" :key="m.id" :label="m.nameCn" :value="m.id" />
         </el-select>
         <el-select
           v-model="filters.bizOwner"
@@ -71,14 +92,24 @@
         >
           <el-option v-for="u in users" :key="u.id" :label="u.name" :value="u.id" />
         </el-select>
-        <el-cascader
-          v-model="filters.assetCatalog"
-          :options="assetCatalogOptions"
-          :props="{ checkStrictly: true, emitPath: false }"
-          placeholder="所属目录"
-          clearable
-          class="filter-cascader"
-        />
+        <div class="ref-count-filter">
+          <span class="ref-count-label">引用数</span>
+          <el-input-number
+            v-model="filters.refCountMin"
+            :min="0"
+            placeholder="最小"
+            controls-position="right"
+            class="ref-count-input"
+          />
+          <span class="ref-count-sep">~</span>
+          <el-input-number
+            v-model="filters.refCountMax"
+            :min="0"
+            placeholder="最大"
+            controls-position="right"
+            class="ref-count-input"
+          />
+        </div>
         <div class="filter-actions">
           <el-button @click="handleReset">重置</el-button>
           <el-button type="primary" @click="handleSearch">筛选</el-button>
@@ -264,13 +295,14 @@ import { ElMessage } from 'element-plus'
 import {
   atomicIndicators,
   users,
-  assetCatalog,
+  models,
+  subjectOptions,
   indicatorCatalogTree,
   derivedIndicatorsByAtomic,
   currentUser,
   isIndicatorAdmin,
 } from '@/mock/data'
-import type { AtomicIndicator, AssetCatalogNode } from '@/types'
+import type { AtomicIndicator } from '@/types'
 import TransferOwnerDialog from './dialogs/TransferOwnerDialog.vue'
 import AtomicRefDetailDialog from './dialogs/AtomicRefDetailDialog.vue'
 import AddCollaboratorDialog from './dialogs/AddCollaboratorDialog.vue'
@@ -292,9 +324,12 @@ const treeData = computed(() => indicatorCatalogTree)
 const filters = ref({
   keyword: '',
   status: '' as string,
+  subjectList: [] as string[],
+  modelIds: [] as string[],
   bizOwner: '',
   techOwner: '',
-  assetCatalog: [] as string[],
+  refCountMin: undefined as number | undefined,
+  refCountMax: undefined as number | undefined,
 })
 
 const pagination = ref({
@@ -325,15 +360,6 @@ const refDetailDialog = ref<{ visible: boolean; indicator: AtomicIndicator | nul
   visible: false,
   indicator: null,
 })
-
-function mapCatalogToOptions(nodes: AssetCatalogNode[]): Array<{ value: string; label: string; children?: ReturnType<typeof mapCatalogToOptions> }> {
-  return nodes.map((c) => ({
-    value: c.id,
-    label: c.label,
-    children: c.children?.length ? mapCatalogToOptions(c.children) : undefined,
-  }))
-}
-const assetCatalogOptions = computed(() => mapCatalogToOptions(assetCatalog))
 
 const hasOfflineSelection = computed(() =>
   selectedRows.value.some((r) => r.status === 'offline')
@@ -375,11 +401,23 @@ const filteredList = computed(() => {
   if (filters.value.techOwner) {
     result = result.filter((i) => i.techOwner === filters.value.techOwner)
   }
-  if (filters.value.assetCatalog?.length) {
-    const catId = Array.isArray(filters.value.assetCatalog)
-      ? filters.value.assetCatalog[filters.value.assetCatalog.length - 1]
-      : filters.value.assetCatalog
-    result = result.filter((i) => i.assetCatalog?.includes(catId))
+  if (filters.value.subjectList?.length) {
+    const subjects = filters.value.subjectList
+    result = result.filter((i) => {
+      const indSubjects = (i.subject || '').split(',').map((s) => s.trim()).filter(Boolean)
+      return subjects.some((s) => indSubjects.includes(s))
+    })
+  }
+  if (filters.value.modelIds?.length) {
+    result = result.filter((i) => filters.value.modelIds.includes(i.modelId))
+  }
+  if (filters.value.refCountMin !== undefined && filters.value.refCountMin !== null) {
+    const min = filters.value.refCountMin
+    result = result.filter((i) => (derivedIndicatorsByAtomic[i.id]?.length || 0) >= min)
+  }
+  if (filters.value.refCountMax !== undefined && filters.value.refCountMax !== null) {
+    const max = filters.value.refCountMax
+    result = result.filter((i) => (derivedIndicatorsByAtomic[i.id]?.length || 0) <= max)
   }
   result.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime())
   pagination.value.total = result.length
@@ -421,9 +459,12 @@ function handleReset() {
   filters.value = {
     keyword: '',
     status: '',
+    subjectList: [],
+    modelIds: [],
     bizOwner: '',
     techOwner: '',
-    assetCatalog: [],
+    refCountMin: undefined,
+    refCountMax: undefined,
   }
   pagination.value.page = 1
 }
@@ -431,8 +472,8 @@ function handleReset() {
 function handlePageChange() {}
 
 function goCreate() {
-  const leafId = selectedCatalogId.value || (Array.isArray(filters.value.assetCatalog) ? filters.value.assetCatalog[filters.value.assetCatalog.length - 1] : filters.value.assetCatalog)
-  const query = leafId ? { catalog: leafId } : undefined
+  const catalogId = selectedCatalogId.value
+  const query = catalogId ? { catalog: catalogId } : undefined
   router.push({ path: '/atomic-indicators/create', query })
 }
 
@@ -638,7 +679,7 @@ onMounted(() => {
 
 .filter-section {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   align-items: end;
 }
@@ -652,6 +693,28 @@ onMounted(() => {
 .filter-select :deep(.el-input__wrapper),
 .filter-cascader :deep(.el-input__wrapper) {
   background-color: #f5f7fa;
+}
+
+.ref-count-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ref-count-label {
+  font-size: 14px;
+  color: #606266;
+  white-space: nowrap;
+}
+
+.ref-count-input {
+  flex: 1;
+  min-width: 80px;
+}
+
+.ref-count-sep {
+  color: #909399;
+  font-size: 14px;
 }
 
 .filter-actions {
